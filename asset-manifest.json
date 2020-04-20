@@ -1,25 +1,25 @@
 {
   "files": {
-    "main.css": "/static/css/main.1231a5ef.chunk.css",
-    "main.js": "/static/js/main.e9020577.chunk.js",
-    "main.js.map": "/static/js/main.e9020577.chunk.js.map",
-    "runtime-main.js": "/static/js/runtime-main.975dfb49.js",
-    "runtime-main.js.map": "/static/js/runtime-main.975dfb49.js.map",
-    "static/css/2.76c7595d.chunk.css": "/static/css/2.76c7595d.chunk.css",
-    "static/js/2.3083dc59.chunk.js": "/static/js/2.3083dc59.chunk.js",
-    "static/js/2.3083dc59.chunk.js.map": "/static/js/2.3083dc59.chunk.js.map",
-    "index.html": "/index.html",
-    "precache-manifest.48bcc0813faafe742f87db361074e902.js": "/precache-manifest.48bcc0813faafe742f87db361074e902.js",
-    "service-worker.js": "/service-worker.js",
-    "static/css/2.76c7595d.chunk.css.map": "/static/css/2.76c7595d.chunk.css.map",
-    "static/css/main.1231a5ef.chunk.css.map": "/static/css/main.1231a5ef.chunk.css.map",
-    "static/js/2.3083dc59.chunk.js.LICENSE.txt": "/static/js/2.3083dc59.chunk.js.LICENSE.txt"
+    "main.css": "/todomvc-fp/static/css/main.1231a5ef.chunk.css",
+    "main.js": "/todomvc-fp/static/js/main.7c96c4b8.chunk.js",
+    "main.js.map": "/todomvc-fp/static/js/main.7c96c4b8.chunk.js.map",
+    "runtime-main.js": "/todomvc-fp/static/js/runtime-main.e0a2a58c.js",
+    "runtime-main.js.map": "/todomvc-fp/static/js/runtime-main.e0a2a58c.js.map",
+    "static/css/2.76c7595d.chunk.css": "/todomvc-fp/static/css/2.76c7595d.chunk.css",
+    "static/js/2.3083dc59.chunk.js": "/todomvc-fp/static/js/2.3083dc59.chunk.js",
+    "static/js/2.3083dc59.chunk.js.map": "/todomvc-fp/static/js/2.3083dc59.chunk.js.map",
+    "index.html": "/todomvc-fp/index.html",
+    "precache-manifest.93079789d1fa109e9a3b0f4d5e40ddeb.js": "/todomvc-fp/precache-manifest.93079789d1fa109e9a3b0f4d5e40ddeb.js",
+    "service-worker.js": "/todomvc-fp/service-worker.js",
+    "static/css/2.76c7595d.chunk.css.map": "/todomvc-fp/static/css/2.76c7595d.chunk.css.map",
+    "static/css/main.1231a5ef.chunk.css.map": "/todomvc-fp/static/css/main.1231a5ef.chunk.css.map",
+    "static/js/2.3083dc59.chunk.js.LICENSE.txt": "/todomvc-fp/static/js/2.3083dc59.chunk.js.LICENSE.txt"
   },
   "entrypoints": [
-    "static/js/runtime-main.975dfb49.js",
+    "static/js/runtime-main.e0a2a58c.js",
     "static/css/2.76c7595d.chunk.css",
     "static/js/2.3083dc59.chunk.js",
     "static/css/main.1231a5ef.chunk.css",
-    "static/js/main.e9020577.chunk.js"
+    "static/js/main.7c96c4b8.chunk.js"
   ]
 }
