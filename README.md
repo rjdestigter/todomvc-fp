@@ -1,4 +1,13 @@
-This project was bootstrapped with [Create React App](https://github.com/facebook/create-react-app).
+## Codesansbox
+
+[![Edit todomvc-fp](https://codesandbox.io/static/img/play-codesandbox.svg)](https://codesandbox.io/s/github/rjdestigter/todomvc-fp/tree/master/?fontsize=14&hidenavigation=1&theme=dark)
+
+## TLDR;
+This is an experimental repository examplifiying pure functional programming UI interfaces without the help from libraries such as ReactJS or Vue **but** with _functional efffects_ using [@matechs/effects](https://github.com/Matechs-Garage/matechs-effect), [fp-ts](https://github.com/gcanti/fp-ts), and other functional programming libraries.
+
+## Original README:
+
+This project was bootstrapped with [Create React App](https://github.com/facebook/create-react-app) **but  does not use React**
 
 ## Available Scripts
 
