@@ -1,6 +1,8 @@
 {
   "name": "todomvc-fp",
   "version": "0.1.0",
+  "repository": "https://github.com/rjdestigter/todomvc-fp",
+  "homepage": "http://rjdestigter.github.io/todomvc-fp",
   "private": true,
   "dependencies": {
     "@matechs/console": "^4.0.0-alpha.1",
