@@ -16,5 +16,5 @@ export const getDocument = T.accessM(
   flow((_: DocumentEnv) => _[documentUri], T.pure)
 );
 
-export const mapDocument = <R, E, A>(f: (doc: Document) => T.Effect<R, E, A>) =>
+export const mapDocument = <R, E, A>(f: (doc: Document) => T.Effect<unknown, R, E, A>) =>
   pipe(getDocument, T.map(f));

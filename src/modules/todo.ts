@@ -3,7 +3,7 @@ import { effect as T, stream as S } from "@matechs/effect";
 import * as O from "fp-ts/lib/Option";
 import * as A from "fp-ts/lib/Array";
 import { pipe } from "fp-ts/lib/pipeable";
-import { constant, identity, flow, constVoid } from "fp-ts/lib/function";
+import { constant, identity, flow, constVoid, tuple } from "fp-ts/lib/function";
 
 import * as t from "io-ts";
 import { Do } from "fp-ts-contrib/lib/Do";
@@ -17,8 +17,9 @@ import {
   makeParentElementNotFound,
 } from "./dom";
 import * as Fetch from "./fetch";
-import { store } from "./store";
 import { subscribe } from "./emitter";
+import { store, Store } from "./store";
+import { completed } from "@matechs/effect/lib/effect";
 
 /**
  * ```hs
@@ -169,8 +170,9 @@ export const updateTodoLi = (todo: Todo) => (todoLi: HTMLLIElement) =>
     Do(O.option)
       // Select the input and label dom nodes that are inside the li node
       .bind("label", querySelector("label")(todoLi))
-      .bind("input", querySelector("input")(todoLi))
-      .return(({ label, input }) =>
+      .bind("checkbox", querySelector("input")(todoLi))
+      .bind("input", querySelector<HTMLInputElement>("input.edit")(todoLi))
+      .return(({ label, checkbox, input }) =>
         T.sync(() => {
           // Update title
           label.innerHTML = todo.title;
@@ -180,7 +182,8 @@ export const updateTodoLi = (todo: Todo) => (todoLi: HTMLLIElement) =>
 
           // Mark as completed if so
           todo.completed && todoLi.classList.add("completed");
-          input.checked = todo.completed;
+          checkbox.checked = todo.completed;
+          input.value = todo.title
 
           return todoLi;
         })
@@ -220,83 +223,172 @@ export const renderTodos = (todos: Todos) =>
     )
   )(clearTodosUl);
 
+
+const clickStream = (store: Store<Todos>) => pipe(
+  // With the dom node that is the lisf items
+  todosUl,
+  S.encaseEffect,
+  // Subscribe to clicking the list
+  S.chain(
+    pipe(
+      subscribe("click"), 
+    )
+  ),
+  // Map the mouse event to the target (currentTarget would be the list, we want what the user actually clicked.)
+  S.map((_) => _.target),
+  S.map(O.fromNullable),
+  S.chain(S.fromOption),
+  S.chain((_) => {
+    const target = _ as HTMLElement;
+
+    const todoIdT = pipe(
+      parentElement<HTMLElement, HTMLDivElement>(target),
+      O.chain((div) =>
+        parentElement<HTMLDivElement, HTMLLIElement>(div)
+      ),
+      T.pure,
+      T.chain(
+        T.fromOption(constant(makeParentElementNotFound(target)))
+      ),
+      T.map((parent) => pipe(
+        parent.getAttribute("data-todo-id"),
+        O.fromNullable,
+        O.map(Number),
+        O.map(todoId => tuple(todoId, parent))
+      )),
+      T.chain(
+        T.fromOption(constant(makeParentElementNotFound(target)))
+      ),
+    );
+
+    // If the clicked the remove button
+    if (target.hasAttribute("data-remove")) {
+      return pipe(
+        todoIdT,
+        T.chain(([todoId]) =>
+          store.next((todos) =>
+            todos.filter((todo) => todo.id !== todoId)
+          )
+        ),
+        S.encaseEffect
+      );
+    } else if (target.hasAttribute("data-toggle")) {
+      return pipe(
+        todoIdT,
+        T.chain(([todoId]) =>
+          store.next((todos) =>
+            todos.map((todo) => todo.id === todoId ? {...todo, completed: !todo.completed} : todo)
+          )
+        ),
+        S.encaseEffect
+      );
+    } else if (target.hasAttribute("data-edit")) {
+      return pipe(
+        todoIdT,
+        T.chain(([todoId, li]) => {
+          const addClass = T.sync(() => {
+            li.classList.add('editing')
+          });
+
+          const removeClass = T.sync(() => {
+            li.classList.remove('editing')
+          })
+
+          const input = pipe(
+            li,
+            querySelector<HTMLInputElement>('input.edit'),
+            T.fromOption(constant(makeElementNotFound('li>input'))),
+            T.chain(input => {
+              const focus = T.sync(() => { 
+                input.focus();
+                input.select()
+               })
+
+               const blur = pipe(
+                 input,
+                 subscribe('blur'),
+                 S.take(1),
+                 S.drain,
+                 T.zip(removeClass)
+               )
+
+               const save = pipe(
+                 input,
+                 subscribe('keyup'),
+                 S.filter(event => event.key === 'Enter' && !!input.value.trim()),
+                 S.take(1),
+                 S.drain,
+                 T.chain(constant(
+                  store.next((todos) =>
+                    todos.map((todo) => todo.id === todoId ? {...todo, title: input.value } : todo)
+                  )
+                 )),
+                 T.zip(removeClass)
+               )
+
+               return pipe(
+                 focus,
+                 T.zip(T.race(blur, save))
+               )
+            })
+          )
+
+          return pipe(
+            addClass,
+            T.zip(input),
+          )
+        }
+  
+        ),
+        S.encaseEffect
+      );
+    }
+
+    return S.encaseEffect(T.pure(constVoid()));
+  }),
+  S.drain
+)
+
+const loadTodos = (store: Store<Todos>) => pipe(
+  // Fetch todos from the sever
+  fetchTodos,
+  // Put items in the store
+  T.chain(flow(constant, store.next)),
+  // Fork fetching todos
+  T.fork,
+  T.chain(
+    constant(
+      pipe(
+        // Subscribe to the store
+        store.subscribe,
+        T.chain((stream) =>
+          pipe(
+            stream,
+            // Only take 10 items at a time
+            S.map((list) => pipe(list, A.takeLeft(10))),
+            // Update the DOM
+            S.chain(flow(renderTodos, S.encaseEffect)),
+            S.drain
+          )
+        )
+      )
+    )
+  )
+)
+
 /**
  * The main event
  */
 export const main = pipe(
   pipe(
-      // Use the store
+    // Use the store
     todosStore,
     T.chain((store) =>
       T.parZip(
-          // Fetch todos and subscribe to the store for updates and re-render
-        pipe(
-            // Fetch todos from the sever
-          fetchTodos,
-          // Put items in the store
-          T.chain(flow(constant, store.next)),
-          // Fork fetching todos 
-          T.fork,
-          T.chain(
-            constant(
-              pipe(
-                  // Subscribe to the store
-                store.subscribe,
-                // Only take 10 items at a time
-                S.map((list) => pipe(list, A.takeLeft(10))),
-                // Update the DOM
-                S.chain(flow(renderTodos, S.encaseEffect)),
-                S.drain
-              )
-            )
-          )
-        ),
-        // Subscribe to click events in the list and take the appropriate action
-        pipe(
-            // With the dom node that is the lisf items
-          todosUl,
-          S.encaseEffect,
-          // Subscribe to clicking the list
-          S.chain(subscribe("click")),
-          // Map the mouse event to the target (currentTarget would be the list, we want what the user actually clicked.)
-          S.map((_) => _.target),
-          S.map(O.fromNullable),
-          S.chain(S.fromOption),
-          S.chain((_) => {
-            const target = _ as HTMLElement;
-
-            // If the clicked the remove button
-            if (target.hasAttribute("data-remove")) {
-              return pipe(
-                parentElement<HTMLElement, HTMLDivElement>(target),
-                O.chain((div) =>
-                  parentElement<HTMLDivElement, HTMLLIElement>(div)
-                ),
-                T.pure,
-                T.chain(
-                  T.fromOption(constant(makeParentElementNotFound(target)))
-                ),
-                T.map((parent) => parent.getAttribute("data-todo-id")),
-                T.map(O.fromNullable),
-                T.chain(
-                  T.fromOption(constant(makeParentElementNotFound(target)))
-                ),
-                T.map(Number),
-                T.chain((todoId) =>
-                  store.next((todos) =>
-                    todos.filter((todo) => todo.id !== todoId)
-                  )
-                ),
-                S.encaseEffect
-              );
-            }
-
-            return S.encaseEffect(T.pure(constVoid()));
-          }),
-          S.drain
-        )
+        // Fetch todos and subscribe to the store for updates and re-render
+       loadTodos(store),
+       clickStream(store)
       )
     )
-  ),
-  T.forever
+  )
 );

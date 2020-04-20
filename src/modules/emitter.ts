@@ -1,7 +1,6 @@
 import { effect as T, stream as S, managed as M } from "@matechs/effect";
 import { pipe } from "fp-ts/lib/pipeable";
 import { log } from "@matechs/console";
-import { AsyncRT } from "@matechs/effect/lib/effect";
 
 export const uri = "@uri/emitter";
 
@@ -22,12 +21,12 @@ export interface Emitter {
   [uri]: {
     fromEvent: <TEventType extends string>(
       type: TEventType
-    ) => (cb: EventHandler<TEventType>) => T.Effect<T.NoEnv, never, void>;
+    ) => (cb: EventHandler<TEventType>) => T.Effect<unknown, unknown, never, void>;
     addEventListener: <TElement extends Pick<Element, 'addEventListener' | 'removeEventListener'>>(
       el: TElement
     ) => <TEventType extends string>(
       type: TEventType
-    ) => (cb: EventHandler<TEventType>) => T.Effect<T.NoEnv, never, void>;
+    ) => (cb: EventHandler<TEventType>) => T.Effect<unknown, unknown, never, void>;
   };
 }
 
@@ -40,7 +39,7 @@ export const subscribe = <TEventType extends string>(type: TEventType, ret?: any
   return S.fromSource(
     M.managed.chain(
       M.bracket(
-        T.accessM((_: Emitter & AsyncRT) =>
+        T.accessM((_: Emitter) =>
           T.sync(() => {
             const { next, ops, hasCB } = S.su.queueUtils<
               never,

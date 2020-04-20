@@ -5,28 +5,30 @@ import {
   queue as Q,
   managed as M,
 } from "@matechs/effect";
+import { subject } from "@matechs/effect/lib/stream";
 import { pipe } from "fp-ts/lib/pipeable";
-import { some } from "fp-ts/lib/Option";
+import * as O from "fp-ts/lib/Option";
 
-export type Store<A> = {
-    next: (f: (current: A) => A) => T.Effect<T.AsyncRT, never, void>,
-    subscribe: S.Stream<T.AsyncRT, never, A>
+export interface Store<A> {
+  next: (f: (current: A) => A) => T.Effect<unknown, unknown, never, void>;
+  interrupt: T.Effect<unknown, unknown, never, void>;
+  subscribe: T.Sync<S.Stream<unknown, unknown, never, A>>;
 }
 
 export const store = <A>(initial?: A) =>
   pipe(
     Q.unboundedQueue<A>(),
     T.zip(ref.makeRef(initial ? [initial] : [])),
-    T.map(([queue, state]): Store<A> => {
+    T.chain(([queue, state]) => {
       const next = (f: (current: A) => A) =>
         pipe(
-            state.update(([current]) => [f(current)]),
-            T.chain(([a]) => queue.offer(a))
+          state.update(([current]) => [f(current)]),
+          T.chain(([a]) => queue.offer(a))
         );
 
-      const subscribe = pipe(
-        S.fromSource(M.pure(pipe(queue.take, T.map(some))))
+      return pipe(
+        subject(S.fromSource(M.pure(pipe(queue.take, T.map(O.some))))),        
+        T.map((s): Store<A> => ({ ...s, next }))
       );
-      return { next, subscribe }
     })
   );

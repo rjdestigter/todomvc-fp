@@ -28,9 +28,9 @@ const provided = pipe(
   // Provide event emitter with root element
   T.provide(makeEmitterLive(document)),
   // Provide depracated thing
-  T.provide({
-    [T.AsyncRTURI]: {},
-  }),
+  // T.provide({
+  //   [T.AsyncRTURI]: {},
+  // }),
 );
 
 T.runToPromise(provided)

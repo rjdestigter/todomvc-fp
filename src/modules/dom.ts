@@ -3,7 +3,6 @@ import * as O from "fp-ts/lib/Option";
 import { pipe } from "fp-ts/lib/pipeable";
 import { constant, flow, identity } from "fp-ts/lib/function";
 import { subscribe, Emitter, EventFor } from "./emitter";
-import { AsyncRT } from "@matechs/effect/lib/effect";
 import { DocumentEnv, getDocument } from "./document";
 
 /**
@@ -31,37 +30,37 @@ export const domLive: Dom = {
   },
 };
 
-export const provideDom = T.provide(domLive)
+export const provideDom = T.provide(domLive);
 
 /**
  * Errors
  */
 class ElementNotFound extends Error {
-    constructor(selectors: string) {
-      super(`$(${selectors}) did not return an element.`);
-      this.name = "ElementNotFound";
-    }
+  constructor(selectors: string) {
+    super(`$(${selectors}) did not return an element.`);
+    this.name = "ElementNotFound";
   }
-  
-  class ParentElementNotFound extends Error {
-    constructor(child: string) {
-      super(`Parent of node: ${child} not found.`);
-      this.name = "ParentElementNotFound";
-    }
+}
+
+class ParentElementNotFound extends Error {
+  constructor(child: string) {
+    super(`Parent of node: ${child} not found.`);
+    this.name = "ParentElementNotFound";
   }
-  
-  export const makeElementNotFound = (selectors: string) =>
-    new ElementNotFound(selectors);
-  
-  export const raiseElementNotFound = flow(makeElementNotFound, T.raiseError);
-  
-  export const makeParentElementNotFound = (element: HTMLElement) =>
-    new ParentElementNotFound(element.toString());
-  
-  export const raiseParentElementNotFound = flow(
-    makeParentElementNotFound,
-    T.raiseError
-  );
+}
+
+export const makeElementNotFound = (selectors: string) =>
+  new ElementNotFound(selectors);
+
+export const raiseElementNotFound = flow(makeElementNotFound, T.raiseError);
+
+export const makeParentElementNotFound = (element: HTMLElement) =>
+  new ParentElementNotFound(element.toString());
+
+export const raiseParentElementNotFound = flow(
+  makeParentElementNotFound,
+  T.raiseError
+);
 
 /**
  * Utilities
@@ -70,8 +69,9 @@ interface CreateElement {
   <K extends keyof HTMLElementTagNameMap>(
     tagName: K,
     options?: ElementCreationOptions
-  ): T.Effect<Dom, never, HTMLElementTagNameMap[K]>;
+  ): T.Effect<unknown, Dom, never, HTMLElementTagNameMap[K]>;
   (tagName: string, options?: ElementCreationOptions): T.Effect<
+    unknown,
     Dom,
     never,
     HTMLElement
@@ -139,16 +139,19 @@ export const querySelectorO: QuerySelectorT = (selectors: string) => <
  */
 interface $ {
   <K extends keyof HTMLElementTagNameMap>(selectors: K): T.Effect<
+    unknown,
     DocumentEnv,
     ElementNotFound,
     HTMLElementTagNameMap[K]
   >;
   <K extends keyof SVGElementTagNameMap>(selectors: K): T.Effect<
+    unknown,
     DocumentEnv,
     ElementNotFound,
     SVGElementTagNameMap[K]
   >;
   <E extends Element = Element>(selectors: string): T.Effect<
+    unknown,
     DocumentEnv,
     ElementNotFound,
     E
@@ -183,20 +186,23 @@ export const raiseEmptyOptionOfElement = (message: string) =>
 
 export const makeEventStream = <TEventType extends string>(
   eventType: TEventType
-) => <R, E, A extends Element>(elementT: T.Effect<R, E, O.Option<A>>) =>
+) => <
+  R,
+  E,
+  A extends Pick<Element, "addEventListener" | "removeEventListener">
+>(
+  elementT: T.Effect<unknown, R, E, O.Option<A>>
+) =>
   pipe(
     elementT,
     T.map((elementO) =>
       pipe(
         elementO,
         O.map(subscribe(eventType)),
+        (effect) => effect,
         O.fold<
-          S.Stream<Emitter & AsyncRT, never, EventFor<TEventType>>,
-          S.Stream<
-            Emitter & AsyncRT,
-            EmptyOptionOfElement,
-            EventFor<TEventType>
-          >
+          S.Stream<unknown, Emitter, never, EventFor<TEventType>>,
+          S.Stream<unknown, Emitter, EmptyOptionOfElement, EventFor<TEventType>>
         >(
           constant(
             S.raised(

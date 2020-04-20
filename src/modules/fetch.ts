@@ -12,7 +12,11 @@ export interface Fetch {
 
 export const fetchLive: Fetch = {
   [uri]: {
-    fetch: window.fetch.bind(window)
+    fetch: (...args) => new Promise(resolve => {
+      setTimeout(() => {
+        resolve(window.fetch.bind(window)(...args))
+      }, 2000)
+    })
   },
 };
 
