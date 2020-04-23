@@ -14,7 +14,7 @@
 importScripts("https://storage.googleapis.com/workbox-cdn/releases/4.3.1/workbox-sw.js");
 
 importScripts(
-  "/todomvc-fp/precache-manifest.a6980a2045fd94bce31a56aa1a09950f.js"
+  "/todomvc-fp/precache-manifest.7944b2ca978a22d73b2ea478c764144b.js"
 );
 
 self.addEventListener('message', (event) => {
