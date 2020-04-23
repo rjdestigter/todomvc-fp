@@ -1,7 +1,8 @@
 import { effect as T, stream as S } from "@matechs/effect";
 
 import * as O from "fp-ts/lib/Option";
-import * as A from "fp-ts/lib/Array";
+import * as A from "fp-ts/lib/ReadonlyArray";
+import * as Eq from "fp-ts/lib/Eq";
 import { pipe } from "fp-ts/lib/pipeable";
 import { constant, identity, flow, constVoid, tuple } from "fp-ts/lib/function";
 
@@ -15,11 +16,12 @@ import {
   $,
   parentElement,
   makeParentElementNotFound,
+  Dom,
 } from "./dom";
 import * as Fetch from "./fetch";
 import { subscribe } from "./emitter";
 import { store, Store } from "./store";
-import { completed } from "@matechs/effect/lib/effect";
+import { log, Console } from "@matechs/console";
 
 /**
  * ```hs
@@ -60,15 +62,45 @@ const todoDecoder = t.type(
  *
  * io-ts decoder for a list of [[Todo]]
  */
-const todosDecoder = t.array(todoDecoder);
+const todosDecoder = t.readonlyArray(todoDecoder);
 
 // Types
-export type Todo = t.TypeOf<typeof todoDecoder>;
+type Todo = t.TypeOf<typeof todoDecoder>;
 
-export type Todos = t.TypeOf<typeof todosDecoder>;
+type Todos = readonly Todo[];
+
+const eqTodoById = Eq.contramap((todo: Todo) => todo.id)(Eq.eqNumber);
+
+// Store (environment)
+const uri = "@uri/todo-store";
+
+interface TodoStore {
+  [uri]: Store<Todos>;
+}
+
+/**
+ * ```hs
+ *
+ * todosStore :: Effect unknown never (Store Todos)
+ *
+ * ```
+ *
+ * You can update the list of todos by passing a callback function to store.next
+ * or subscribe to store changes using the store.subscribe stream.
+ */
+const storeT = store<Todos>();
+
+const provideTodoStore = T.provideM(
+  pipe(
+    storeT,
+    T.map((store) => ({ [uri]: store }))
+  )
+);
+
+const todoStore = pipe(T.access((_: TodoStore) => _[uri]));
 
 // APIS
-export const fetchTodos = pipe(
+const fetchTodos = pipe(
   // Fetch list of todos from the server
   Fetch.fetch(URL),
   // Decode the response
@@ -89,10 +121,10 @@ export const fetchTodos = pipe(
 const html = `<li>
     <div class="view">
         <input data-toggle class="toggle" type="checkbox">
-        <label data-edit>Buy a unicorn</label>
+        <label data-edit></label>
         <button data-remove class="destroy"></button>
     </div>
-    <input class="edit" value="Rule the web">
+    <input class="edit" />
 </li>`;
 
 // TODO: Use environment to produce div
@@ -101,25 +133,13 @@ const _div = createElement("div");
 /**
  * ```hs
  *
- * todosStore :: Effect unknown never (Store Todos)
- *
- * ```
- *
- * You can update the list of todos by passing a callback function to store.next
- * or subscribe to store changes using the store.subscribe stream.
- */
-export const todosStore = store<Todos>();
-
-/**
- * ```hs
- *
- * createTodoLi :: Effect Dom ElementNotFound HTMLLIElement
+ * createDomNodeForTodo :: Effect
  *
  * ```
  *
  * Create a dom element for a todo
  */
-export const createTodoLi = pipe(
+const createDomNodeForTodo = pipe(
   _div,
   T.chain((el) =>
     T.sync(() => {
@@ -139,33 +159,24 @@ export const createTodoLi = pipe(
 /**
  * ```hs
  *
- * todosUl :: Effect DocumentEnv ElementNotFound HTMLUListElement
+ * todosUl :: Effect
  *
  * ```
  *
  * Select the ul dom node that contains the list of li nodes that are todo items.
  */
-export const todosUl = $<HTMLUListElement>(".todo-list");
-
-export const clearTodosUl = pipe(
-  todosUl,
-  T.chain((ul) =>
-    T.sync(() => {
-      ul.innerHTML = "";
-    })
-  )
-);
+const todosUl = $<HTMLUListElement>(".todo-list");
 
 /**
  * ```hs
  *
- * updateTodoLi :: Todo -> HTMLLIElement -> Effect unknown Error HTMLLIElement
+ * updateDomNodeOfTodo :: Todo -> HTMLLIElement -> Effect
  *
  * ```
  *
  * Update a given todo dom li node with information from a [[Todo]] model
  */
-export const updateTodoLi = (todo: Todo) => (todoLi: HTMLLIElement) =>
+const updateDomNodeOfTodo = (todo: Todo) => (todoLi: HTMLLIElement) =>
   pipe(
     Do(O.option)
       // Select the input and label dom nodes that are inside the li node
@@ -183,7 +194,7 @@ export const updateTodoLi = (todo: Todo) => (todoLi: HTMLLIElement) =>
           // Mark as completed if so
           todo.completed && todoLi.classList.add("completed");
           checkbox.checked = todo.completed;
-          input.value = todo.title
+          input.value = todo.title;
 
           return todoLi;
         })
@@ -193,47 +204,42 @@ export const updateTodoLi = (todo: Todo) => (todoLi: HTMLLIElement) =>
     T.chain(identity)
   );
 
+const clickedTodoId = (target: HTMLElement) =>
+  pipe(
+    parentElement<HTMLElement, HTMLDivElement>(target),
+    O.chain((div) => parentElement<HTMLDivElement, HTMLLIElement>(div)),
+    T.pure,
+    T.chain(T.fromOption(constant(makeParentElementNotFound(target)))),
+    T.map((parent) =>
+      pipe(
+        parent.getAttribute("data-todo-id"),
+        O.fromNullable,
+        O.map(Number),
+        O.map((todoId) => tuple(todoId, parent))
+      )
+    ),
+    T.chain(T.fromOption(constant(makeParentElementNotFound(target))))
+  );
+
 /**
  * ```hs
  *
- * renderTodos :: [Todo] -> Effect (DocumentEnv & Dom) (Error | ElementNotFound) (void, HTMLUListElement)
+ * handleEvents :: Effect
  *
  * ```
  *
- * Clear the ul dom node and re-render the list of li todo items.
+ * Handle click events that indicate the user wants to:
+ * - Remove the todo
+ * - Toggle the todo's completed status
+ * - Edit the todo's title
  *
  */
-export const renderTodos = (todos: Todos) =>
-  T.zip(
-    pipe(
-      todos,
-      A.map((todo) => pipe(createTodoLi, T.chain(updateTodoLi(todo)))),
-      A.array.sequence(T.effect),
-      T.chain((list) =>
-        pipe(
-          $<HTMLUListElement>(".todo-list"),
-          T.chain((ul) =>
-            T.sync(() => {
-              list.forEach((li) => ul.appendChild(li));
-              return ul;
-            })
-          )
-        )
-      )
-    )
-  )(clearTodosUl);
-
-
-const clickStream = (store: Store<Todos>) => pipe(
-  // With the dom node that is the lisf items
+const handleEvents = pipe(
+  // With the root dom node that is the list of items
   todosUl,
   S.encaseEffect,
   // Subscribe to clicking the list
-  S.chain(
-    pipe(
-      subscribe("click"), 
-    )
-  ),
+  S.chain(pipe(subscribe("click"))),
   // Map the mouse event to the target (currentTarget would be the list, we want what the user actually clicked.)
   S.map((_) => _.target),
   S.map(O.fromNullable),
@@ -241,105 +247,106 @@ const clickStream = (store: Store<Todos>) => pipe(
   S.chain((_) => {
     const target = _ as HTMLElement;
 
-    const todoIdT = pipe(
-      parentElement<HTMLElement, HTMLDivElement>(target),
-      O.chain((div) =>
-        parentElement<HTMLDivElement, HTMLLIElement>(div)
-      ),
-      T.pure,
-      T.chain(
-        T.fromOption(constant(makeParentElementNotFound(target)))
-      ),
-      T.map((parent) => pipe(
-        parent.getAttribute("data-todo-id"),
-        O.fromNullable,
-        O.map(Number),
-        O.map(todoId => tuple(todoId, parent))
-      )),
-      T.chain(
-        T.fromOption(constant(makeParentElementNotFound(target)))
-      ),
-    );
+    const todoIdEffect = clickedTodoId(target);
 
-    // If the clicked the remove button
+    // Clicking the remove button (red x on hover)
     if (target.hasAttribute("data-remove")) {
       return pipe(
-        todoIdT,
-        T.chain(([todoId]) =>
-          store.next((todos) =>
-            todos.filter((todo) => todo.id !== todoId)
-          )
+        todoIdEffect,
+        T.zip(todoStore),
+        T.chain(([[todoId], store]) =>
+          store.next((todos) => todos.filter((todo) => todo.id !== todoId))
         ),
         S.encaseEffect
       );
+
+      // Clicking the toggle "completed" checkbox
     } else if (target.hasAttribute("data-toggle")) {
       return pipe(
-        todoIdT,
-        T.chain(([todoId]) =>
+        todoIdEffect,
+        T.zip(todoStore),
+        T.chain(([[todoId], store]) =>
           store.next((todos) =>
-            todos.map((todo) => todo.id === todoId ? {...todo, completed: !todo.completed} : todo)
+            todos.map((todo) =>
+              todo.id === todoId
+                ? { ...todo, completed: !todo.completed }
+                : todo
+            )
           )
         ),
         S.encaseEffect
       );
+
+      // Clicking the label to edit the title
     } else if (target.hasAttribute("data-edit")) {
       return pipe(
-        todoIdT,
+        todoIdEffect,
         T.chain(([todoId, li]) => {
+          // Makes the text input box visible
           const addClass = T.sync(() => {
-            li.classList.add('editing')
+            li.classList.add("editing");
           });
 
+          // Hides the text input box
           const removeClass = T.sync(() => {
-            li.classList.remove('editing')
-          })
+            li.classList.remove("editing");
+          });
 
           const input = pipe(
             li,
-            querySelector<HTMLInputElement>('input.edit'),
-            T.fromOption(constant(makeElementNotFound('li>input'))),
-            T.chain(input => {
-              const focus = T.sync(() => { 
+            querySelector<HTMLInputElement>("input.edit"),
+            T.fromOption(constant(makeElementNotFound("li>input"))),
+            T.chain((input) => {
+              // Gives the text input box focus and selects the text
+              const setFocus = T.sync(() => {
                 input.focus();
-                input.select()
-               })
+                input.select();
+              });
 
-               const blur = pipe(
-                 input,
-                 subscribe('blur'),
-                 S.take(1),
-                 S.drain,
-                 T.zip(removeClass)
-               )
+              // Executes when the text input box looses focus
+              // Will hide the text input box
+              const handleBlur = pipe(
+                input,
+                subscribe("blur"),
+                S.take(1),
+                S.drain,
+                T.zip(removeClass)
+              );
 
-               const save = pipe(
-                 input,
-                 subscribe('keyup'),
-                 S.filter(event => event.key === 'Enter' && !!input.value.trim()),
-                 S.take(1),
-                 S.drain,
-                 T.chain(constant(
-                  store.next((todos) =>
-                    todos.map((todo) => todo.id === todoId ? {...todo, title: input.value } : todo)
+              // Updates the store on every keystroke
+              const handlTextInput = pipe(
+                input,
+                // Listen to the text input's "oninput" event
+                subscribe("input"),
+                S.chain(
+                  constant(
+                    pipe(
+                      todoStore,
+                      // Update the title of the todo in the store
+                      T.chain((store) =>
+                        store.next((todos) =>
+                          todos.map((todo) =>
+                            todo.id === todoId
+                              ? { ...todo, title: input.value }
+                              : todo
+                          )
+                        )
+                      ),
+                      S.encaseEffect
+                    )
                   )
-                 )),
-                 T.zip(removeClass)
-               )
+                ),
+                // Do this until the text input box looses focus
+                S.takeUntil(handleBlur),
+                S.drain
+              );
 
-               return pipe(
-                 focus,
-                 T.zip(T.race(blur, save))
-               )
+              return pipe(setFocus, T.zip(handlTextInput));
             })
-          )
+          );
 
-          return pipe(
-            addClass,
-            T.zip(input),
-          )
-        }
-  
-        ),
+          return pipe(addClass, T.zip(input));
+        }),
         S.encaseEffect
       );
     }
@@ -347,48 +354,234 @@ const clickStream = (store: Store<Todos>) => pipe(
     return S.encaseEffect(T.pure(constVoid()));
   }),
   S.drain
-)
+);
 
-const loadTodos = (store: Store<Todos>) => pipe(
-  // Fetch todos from the sever
-  fetchTodos,
-  // Put items in the store
-  T.chain(flow(constant, store.next)),
-  // Fork fetching todos
-  T.fork,
-  T.chain(
-    constant(
+/**
+ * ```hs
+ *
+ * replaceTodosInStore :: [Todo] => Effect
+ *
+ * ```
+ */
+const replaceTodosInStore = (todos: Todos) =>
+  pipe(
+    todoStore,
+    T.chain((store) => store.next(constant(todos)))
+  );
+
+/**
+ * ```hs
+ *
+ * fetchAndStoreTodos :: Effect
+ *
+ * ```
+ *
+ * Fetch todo items from the server and replace the store with them.
+ */
+const fetchAndStoreTodos = pipe(fetchTodos, T.chain(replaceTodosInStore));
+
+const logChanges = T.Do()
+  .bind("store", todoStore)
+  .bindL("subscription", ({ store }) => store.subscribe)
+  .doL(({ subscription }) =>
+    pipe(subscription, S.chain(flow(log, S.encaseEffect)), S.drain)
+  )
+  .return(constVoid);
+
+/**
+ * ```hs
+ *
+ * emptyListOfTodos :: [Todo]
+ *
+ * ```
+ *
+ */
+const emptyListOfTodos: Todos = [];
+
+/**
+ * ```hs
+ *
+ * getTodosDifference :: [Todo] -> [Todo] -> [Todo]
+ *
+ * ```
+ *
+ * Return todos from list a that are not in list b.
+ * This is used to remove dom nodes of deleted todos
+ *
+ */
+const getTodosDifference = A.difference(eqTodoById);
+
+/**
+ * ```hs
+ *
+ * removeTodosFromDom :: [Todo] -> Effect
+ *
+ * ```
+ *
+ * For each todo, remove it's related dom node if present.
+ *
+ */
+const removeTodosFromDom = (todos: Todos) =>
+  pipe(
+    todos,
+    A.map((todo) =>
       pipe(
-        // Subscribe to the store
-        store.subscribe,
-        T.chain((stream) =>
+        // Find the dom node
+        $<HTMLLIElement>(`[data-todo-id="${todo.id}"]`),
+        // Remove it from the dom
+        T.chain((li) => T.sync(li.remove.bind(li)))
+      )
+    ),
+    A.readonlyArray.sequence(T.effect)
+  );
+
+/**
+ * ```hs
+ *
+ * optionOfPreviousTodoInDom :: Effect (Option HTMLLIElement)
+ *
+ * ```
+ *
+ * Initial "previous sibling". Used as the initial value when reducing a list of todos
+ * into a single effect updating the dom
+ *
+ */
+const optionOfPreviousTodoInDom: T.Effect<
+  unknown,
+  Console & Dom,
+  ReturnType<typeof makeElementNotFound> | Error,
+  O.Option<HTMLLIElement>
+> = T.pure(O.none);
+
+/**
+ * ```hs
+ *
+ * createAndUpdateTodoNode :: HTMLUListElement -> Effect (Option HTMLLIElement) -> Effect HTMLLIElement
+ *
+ * ```
+ *
+ * Creates new dom nodes for todos that are not yet present in the dom
+ * and updates dom nodes of other todos
+ *
+ */
+const createAndUpdateTodoNode = (ul: HTMLUListElement) => (
+  domNodeOfPreviousTodoInList: O.Option<HTMLLIElement>
+) => (todo: Todo) =>
+  pipe(
+    // Create a dom node
+    createDomNodeForTodo,
+    // Update it with information from the todo
+    T.chain(updateDomNodeOfTodo(todo)),
+    // Get the dom node it should attach itself to if available
+    // With the new dom node and it's "previous sibling"
+    T.chainTap((li) =>
+      pipe(
+        domNodeOfPreviousTodoInList,
+        O.fold(
+          // Prepend the dom node to the start of the list if no previous sibling is available
+          constant(T.sync(() => ul.prepend(li))),
+          // Other wise attach it after it's sibling
+          (domNodeOfPreviousTodoInList) =>
+            T.sync(() => domNodeOfPreviousTodoInList.after(li))
+        )
+      )
+    )
+  );
+
+/**
+ * ```hs
+ *
+ * updateDomWithTodos :: HTMLUListElement -> [Todo] -> Effect
+ *
+ * ```
+ *
+ * Creates new dom nodes for todos that are not yet present in the dom
+ * and updates dom nodes of other todos
+ *
+ */
+const updateDomWithTodos = (ul: HTMLUListElement) => (todos: Todos) =>
+  pipe(
+    todos,
+    // Reduce the list of todos into a single effect
+    A.reduce(optionOfPreviousTodoInDom, (acc, todo) =>
+      pipe(
+        // Chain over the previous effect
+        acc,
+        T.chain((optionOfSiblingTodoInDom) =>
           pipe(
-            stream,
-            // Only take 10 items at a time
-            S.map((list) => pipe(list, A.takeLeft(10))),
-            // Update the DOM
-            S.chain(flow(renderTodos, S.encaseEffect)),
-            S.drain
+            ul,
+            querySelector<HTMLLIElement>(`[data-todo-id="${todo.id}"]`),
+            O.fold(
+              // Create a dom node for new todos
+              // The accumulated effect is passed so that
+              // new dom nodes can attach themselves after the previous one
+              constant(
+                createAndUpdateTodoNode(ul)(optionOfSiblingTodoInDom)(todo)
+              ),
+              // Or if a dom node was found, update it
+              updateDomNodeOfTodo(todo)
+            ),
+            T.map(O.some)
           )
         )
       )
     )
-  )
-)
+  );
 
 /**
- * The main event
+ * ```hs
+ *
+ * commitStoreUpdatesToDom :: Effect
+ *
+ * ```
+ *
+ * Subscribes to store changes and updates the dom.
+ *
  */
-export const main = pipe(
-  pipe(
-    // Use the store
-    todosStore,
-    T.chain((store) =>
-      T.parZip(
-        // Fetch todos and subscribe to the store for updates and re-render
-       loadTodos(store),
-       clickStream(store)
-      )
+const commitStoreUpdatesToDom = T.Do()
+  .bind("store", todoStore)
+  .bindL("subscription", ({ store }) => store.subscribe)
+  .bind("ul", todosUl)
+  // With store subscription and root dom node do:
+  .doL(({ subscription, ul }) =>
+    pipe(
+      subscription,
+      // Take 10 todo items at a time
+      S.map(A.takeLeft(10)),
+      // Keep track of previous list to use for comparison
+      S.scan(tuple(emptyListOfTodos, emptyListOfTodos), ([prev], next) =>
+        tuple(next, prev)
+      ),
+      S.chain(([next, prev]) =>
+        S.encaseEffect(
+          pipe(
+            // Remove todos that were in the previous list but not in the next
+            removeTodosFromDom(getTodosDifference(prev, next)),
+            // Add todos to the dom that are in the new list but weren't in the previous
+            // or update nodes with new information
+            T.zip(updateDomWithTodos(ul)(next))
+          )
+        )
+      ),
+      S.drain
     )
   )
+  .return(constVoid);
+
+/**
+ * ```hs
+ *
+ * main :: Effect
+ *
+ * ```
+ *
+ * TodoMVC Program
+ */
+export const main = pipe(
+  T.parZip(
+    T.parZip(logChanges, T.parZip(fetchAndStoreTodos, handleEvents)),
+    commitStoreUpdatesToDom
+  ),
+
+  provideTodoStore
 );

@@ -10,7 +10,7 @@ import { pipe } from "fp-ts/lib/pipeable";
 import * as O from "fp-ts/lib/Option";
 
 export interface Store<A> {
-  next: (f: (current: A) => A) => T.Effect<unknown, unknown, never, void>;
+  next: (f: (current: A) => A) => T.Async<void>;
   interrupt: T.Effect<unknown, unknown, never, void>;
   subscribe: T.Sync<S.Stream<unknown, unknown, never, A>>;
 }
