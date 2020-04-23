@@ -4,7 +4,14 @@ import * as O from "fp-ts/lib/Option";
 import * as A from "fp-ts/lib/ReadonlyArray";
 import * as Eq from "fp-ts/lib/Eq";
 import { pipe } from "fp-ts/lib/pipeable";
-import { constant, identity, flow, constVoid, tuple } from "fp-ts/lib/function";
+import {
+  constant,
+  identity,
+  flow,
+  constVoid,
+  tuple,
+  constTrue,
+} from "fp-ts/lib/function";
 
 import * as t from "io-ts";
 import { Do } from "fp-ts-contrib/lib/Do";
@@ -19,7 +26,7 @@ import {
   Dom,
 } from "./dom";
 import * as Fetch from "./fetch";
-import { subscribe } from "./emitter";
+import { subscribe, Emitter } from "./emitter";
 import { store, Store } from "./store";
 import { log, Console } from "@matechs/console";
 
@@ -74,8 +81,16 @@ const eqTodoById = Eq.contramap((todo: Todo) => todo.id)(Eq.eqNumber);
 // Store (environment)
 const uri = "@uri/todo-store";
 
-interface TodoStore {
-  [uri]: Store<Todos>;
+interface TodosState {
+  todos: Todos;
+  filterBy: "all" | "active" | "completed";
+  new: "";
+}
+
+type TodosStore = Store<TodosState>;
+
+interface TodoStoreEnv {
+  [uri]: TodosStore;
 }
 
 /**
@@ -88,7 +103,11 @@ interface TodoStore {
  * You can update the list of todos by passing a callback function to store.next
  * or subscribe to store changes using the store.subscribe stream.
  */
-const storeT = store<Todos>();
+const storeT = store<TodosState>({
+  todos: [],
+  filterBy: "all",
+  new: "",
+});
 
 const provideTodoStore = T.provideM(
   pipe(
@@ -97,7 +116,7 @@ const provideTodoStore = T.provideM(
   )
 );
 
-const todoStore = pipe(T.access((_: TodoStore) => _[uri]));
+const todoStore = pipe(T.access((_: TodoStoreEnv) => _[uri]));
 
 // APIS
 const fetchTodos = pipe(
@@ -192,7 +211,9 @@ const updateDomNodeOfTodo = (todo: Todo) => (todoLi: HTMLLIElement) =>
           todoLi.setAttribute("data-todo-id", "" + todo.id);
 
           // Mark as completed if so
-          todo.completed && todoLi.classList.add("completed");
+          todo.completed
+            ? todoLi.classList.add("completed")
+            : todoLi.classList.remove("completed");
           checkbox.checked = todo.completed;
           input.value = todo.title;
 
@@ -255,7 +276,12 @@ const handleEvents = pipe(
         todoIdEffect,
         T.zip(todoStore),
         T.chain(([[todoId], store]) =>
-          store.next((todos) => todos.filter((todo) => todo.id !== todoId))
+          store.next((state) => {
+            return {
+              ...state,
+              todos: state.todos.filter((todo) => todo.id !== todoId),
+            };
+          })
         ),
         S.encaseEffect
       );
@@ -266,13 +292,16 @@ const handleEvents = pipe(
         todoIdEffect,
         T.zip(todoStore),
         T.chain(([[todoId], store]) =>
-          store.next((todos) =>
-            todos.map((todo) =>
-              todo.id === todoId
-                ? { ...todo, completed: !todo.completed }
-                : todo
-            )
-          )
+          store.next((state) => {
+            return {
+              ...state,
+              todos: state.todos.map((todo) =>
+                todo.id === todoId
+                  ? { ...todo, completed: !todo.completed }
+                  : todo
+              ),
+            };
+          })
         ),
         S.encaseEffect
       );
@@ -324,13 +353,14 @@ const handleEvents = pipe(
                       todoStore,
                       // Update the title of the todo in the store
                       T.chain((store) =>
-                        store.next((todos) =>
-                          todos.map((todo) =>
+                        store.next((state) => ({
+                          ...state,
+                          todos: state.todos.map((todo) =>
                             todo.id === todoId
                               ? { ...todo, title: input.value }
                               : todo
-                          )
-                        )
+                          ),
+                        }))
                       ),
                       S.encaseEffect
                     )
@@ -366,7 +396,7 @@ const handleEvents = pipe(
 const replaceTodosInStore = (todos: Todos) =>
   pipe(
     todoStore,
-    T.chain((store) => store.next(constant(todos)))
+    T.chain((store) => store.next((state) => ({ ...state, todos })))
   );
 
 /**
@@ -546,6 +576,18 @@ const commitStoreUpdatesToDom = T.Do()
   .doL(({ subscription, ul }) =>
     pipe(
       subscription,
+      S.map((state) =>
+        state.filterBy === "all"
+          ? state.todos
+          : pipe(
+              state.todos,
+              A.filter((todo) =>
+                state.filterBy === "completed"
+                  ? todo.completed
+                  : !todo.completed
+              )
+            )
+      ),
       // Take 10 todo items at a time
       S.map(A.takeLeft(10)),
       // Keep track of previous list to use for comparison
@@ -568,6 +610,312 @@ const commitStoreUpdatesToDom = T.Do()
   )
   .return(constVoid);
 
+const updateCounter = pipe(
+  todoStore,
+  T.chain((store) => store.subscribe),
+  S.encaseEffect,
+  S.chain(identity),
+  S.map((state) => state.todos),
+  S.map((todos) =>
+    pipe(
+      todos,
+      A.filter((todo) => !todo.completed)
+    )
+  ),
+  S.map((todos) => todos.length),
+  S.chain((itemsLeft) =>
+    S.encaseEffect(
+      pipe(
+        $(".todo-count"),
+        T.map(querySelector("strong")),
+        T.chain(
+          T.fromOption(constant(makeElementNotFound(".todo-count > strong")))
+        ),
+        T.chain((el) =>
+          T.sync(() => {
+            el.innerHTML = "" + itemsLeft;
+          })
+        )
+      )
+    )
+  ),
+  S.drain
+);
+
+const makeHandleFilter = (filterBy: "all" | "active" | "completed") =>
+  pipe(
+    $<HTMLAnchorElement>(`#btn-filter-${filterBy}`),
+    S.encaseEffect,
+    S.chain(subscribe("click")),
+    S.chain(
+      constant(
+        S.encaseEffect(
+          pipe(
+            T.parSequenceT(
+              $<HTMLAnchorElement>(`#btn-filter-all`),
+              $<HTMLAnchorElement>(`#btn-filter-active`),
+              $<HTMLAnchorElement>(`#btn-filter-completed`)
+            ),
+            T.chain((links) =>
+              T.sync(() => {
+                links.forEach((link) => link.classList.remove("selected"));
+              })
+            )
+          )
+        )
+      )
+    ),
+    S.chain(
+      constant(
+        S.encaseEffect(
+          pipe(
+            todoStore,
+            T.chain((store) => store.next((state) => ({ ...state, filterBy })))
+          )
+        )
+      )
+    ),
+    S.chain(
+      constant(
+        S.encaseEffect(
+          pipe(
+            $<HTMLAnchorElement>(`#btn-filter-${filterBy}`),
+            T.chain((link) =>
+              T.sync(() => {
+                link.classList.add("selected");
+              })
+            )
+          )
+        )
+      )
+    ),
+    S.drain
+  );
+
+const handleClearCompleted = pipe(
+  $<HTMLButtonElement>(`.clear-completed`),
+  S.encaseEffect,
+  S.chain(subscribe("click")),
+  S.chain(
+    constant(
+      S.encaseEffect(
+        pipe(
+          todoStore,
+          T.chain((store) =>
+            store.next((state) => ({
+              ...state,
+              todos: pipe(
+                state.todos,
+                A.filter((todo) => !todo.completed)
+              ),
+            }))
+          )
+        )
+      )
+    )
+  ),
+  S.drain
+);
+
+const handleNewTodos = pipe(
+  $<HTMLInputElement>(".new-todo"),
+  S.encaseEffect,
+  S.chain(subscribe("keyup")),
+  S.filter((event) => event.key === "Enter"),
+  S.map((event) => event.currentTarget as HTMLInputElement | null),
+  S.map(O.fromNullable),
+  S.chain(S.fromOption),
+  S.filter((input) => !!input.value.trim()),
+  S.chain((input) =>
+    S.encaseEffect(
+      pipe(
+        todoStore,
+        T.chain((store) =>
+          store.next((state) => ({
+            ...state,
+            todos: [
+              {
+                id: Math.random(),
+                title: input.value,
+                completed: false,
+                userId: Math.random(),
+              },
+              ...state.todos,
+            ],
+          }))
+        ),
+        T.chain(
+          constant(
+            T.sync(() => {
+              input.value = "";
+            })
+          )
+        )
+      )
+    )
+  ),
+  S.drain
+);
+
+const allTodosAreCompleted = (todos: Todos): boolean =>
+  pipe(
+    todos,
+    A.foldLeft(
+      constTrue,
+      (todo, rest) => todo.completed && allTodosAreCompleted(rest)
+    )
+  );
+
+const handleMarkAllAsCompleted = pipe(
+  $<HTMLInputElement>("#toggle-all"),
+  T.zip(todoStore),
+  T.chain(([input, store]) =>
+    pipe(
+      store.subscribe,
+      T.map((susbscription) => tuple(input, store, susbscription))
+    )
+  ),
+  S.encaseEffect,
+  S.chain(
+    ([input, store, susbscription]) => {
+      const stateS: S.AsyncR<Emitter, void> = pipe(
+        susbscription,
+        S.map((state) =>
+          state.filterBy === "all"
+            ? state.todos
+            : pipe(
+                state.todos,
+                A.filter((todo) =>
+                  state.filterBy === "completed"
+                    ? todo.completed
+                    : !todo.completed
+                )
+              )
+        ),
+        // Take 10 todo items at a time
+        S.map(A.takeLeft(10)),
+        S.map((todos) => tuple(allTodosAreCompleted(todos), todos)),
+        S.chain(([allCompleted, todos]) =>
+          S.encaseEffect(
+            T.sync(() => {
+              input.checked = allCompleted;
+            })
+          )
+        ),
+        S.map(constVoid)
+      );
+
+      const clickS = pipe(
+        subscribe("click")(input),
+        S.chain(
+          constant(
+            S.encaseEffect(
+              pipe(
+                store.get,
+                T.chain((stateO) =>
+                  pipe(
+                    stateO,
+                    O.map((state) => {
+                      const todosListed = pipe(
+                        state.filterBy === "all"
+                          ? state.todos
+                          : pipe(
+                              state.todos,
+                              A.filter((todo) =>
+                                state.filterBy === "completed"
+                                  ? todo.completed
+                                  : !todo.completed
+                              )
+                            ),
+                        A.takeLeft(10)
+                      );
+
+                      const completed = !allTodosAreCompleted(todosListed);
+
+                      return store.next((state) => ({
+                        ...state,
+                        todos: state.todos.map((todo) =>
+                          pipe(
+                            todosListed,
+                            A.findFirstMap((listedTodo) =>
+                              listedTodo.id !== todo.id
+                                ? O.none
+                                : O.some({ ...todo, completed })
+                            ),
+                            O.fold(constant(todo), identity)
+                          )
+                        ),
+                      }));
+                    }),
+                    O.getOrElse<T.Async<void>>(constant(T.sync(constVoid)))
+                  )
+                )
+              )
+            )
+          )
+        ),
+        S.map(constVoid)
+      );
+
+      const merged = S.mergeAll([stateS, clickS]);
+
+      return pipe(merged);
+    }
+    /*
+    pipe(
+      susbscription,
+      S.map((state) =>
+        state.filterBy === "all"
+          ? state.todos
+          : pipe(
+              state.todos,
+              A.filter((todo) =>
+                state.filterBy === "completed"
+                  ? todo.completed
+                  : !todo.completed
+              )
+            )
+      ),
+      // Take 10 todo items at a time
+      S.map(A.takeLeft(10)),
+      S.map((todos) => tuple(allTodosAreCompleted(todos), todos)),
+      S.chain(([allCompleted, todos]) =>
+        S.encaseEffect(
+          T.sync(() => {
+            input.checked = allCompleted;
+            return tuple(allCompleted, todos);
+          })
+        )
+      ),
+      S.chain(([allCompleted, todosListed]) => {
+        debugger;
+        return pipe(
+          subscribe("click")(input),
+          S.take(1),
+          S.chain(() =>
+            S.encaseEffect(
+              store.next((state) => ({
+                ...state,
+                todos: state.todos.map((todo) =>
+                  pipe(
+                    todosListed,
+                    A.findFirstMap((listedTodo) =>
+                      listedTodo.id !== todo.id
+                        ? O.none
+                        : O.some({ ...todo, completed: !allCompleted })
+                    ),
+                    O.fold(constant(todo), identity)
+                  )
+                ),
+              }))
+            )
+          )
+        );
+      })
+    )*/
+  ),
+  S.drain
+);
 /**
  * ```hs
  *
@@ -578,10 +926,18 @@ const commitStoreUpdatesToDom = T.Do()
  * TodoMVC Program
  */
 export const main = pipe(
-  T.parZip(
-    T.parZip(logChanges, T.parZip(fetchAndStoreTodos, handleEvents)),
-    commitStoreUpdatesToDom
+  T.parSequenceT(
+    logChanges,
+    fetchAndStoreTodos,
+    handleEvents,
+    commitStoreUpdatesToDom,
+    updateCounter,
+    makeHandleFilter("all"),
+    makeHandleFilter("active"),
+    makeHandleFilter("completed"),
+    handleNewTodos,
+    handleClearCompleted,
+    handleMarkAllAsCompleted
   ),
-
   provideTodoStore
 );
